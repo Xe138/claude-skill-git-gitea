@@ -101,32 +101,36 @@ DELETE /repos/{owner}/{repo}/hooks/{id}         # Delete hook
 
 ## Token Scopes
 
-When creating tokens, select appropriate scopes:
+### Required Scopes for This Skill
+
+| Scope | Required | Purpose |
+|-------|----------|---------|
+| `write:user` | **Yes** | Create personal repositories via API |
+| `write:repository` | **Yes** | Repository operations (settings, branches) |
+| `read:user` | **Yes** | Verify token, retrieve user info |
+| `delete_repo` | Optional | Delete repositories via API |
+| `write:issue` | Optional | Create/manage issues and pull requests |
+| `write:organization` | Optional | Create/manage organization repositories |
+
+### All Available Scopes
 
 | Scope | Description |
 |-------|-------------|
-| `repo` | Full control of repositories |
-| `repo:status` | Access commit status |
-| `public_repo` | Access public repositories only |
-| `admin:org` | Full control of organizations |
-| `write:org` | Read and write org membership |
-| `read:org` | Read org membership |
-| `admin:public_key` | Full control of user public keys |
-| `write:public_key` | Write user public keys |
-| `read:public_key` | Read user public keys |
-| `admin:repo_hook` | Full control of repository hooks |
-| `write:repo_hook` | Write repository hooks |
-| `read:repo_hook` | Read repository hooks |
-| `notification` | Access notifications |
-| `user` | Full control of user profile |
+| `write:user` | Create repos, manage user settings |
 | `read:user` | Read user profile |
-| `user:email` | Access user email |
-| `user:follow` | Follow/unfollow users |
-| `delete_repo` | Delete repositories |
-| `write:issue` | Write issues |
+| `write:repository` | Full control of repositories |
+| `read:repository` | Read repository data |
+| `write:organization` | Manage organizations |
+| `read:organization` | Read org membership |
+| `write:issue` | Create/edit issues and PRs |
 | `read:issue` | Read issues |
-| `write:misc` | Write misc data |
-| `read:misc` | Read misc data |
+| `write:package` | Manage packages |
+| `read:package` | Read packages |
+| `write:admin` | Admin operations |
+| `read:admin` | Read admin data |
+| `write:notification` | Manage notifications |
+| `read:notification` | Read notifications |
+| `delete_repo` | Delete repositories |
 
 ## Example: Create Repository with Full Options
 

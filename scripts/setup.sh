@@ -153,6 +153,51 @@ test_api_token() {
     return 1
 }
 
+# Validate token has required scopes
+validate_token_scopes() {
+    local url="$1"
+    local token="$2"
+    local missing_scopes=""
+
+    # Test write:user scope (required for creating repos)
+    local response
+    response=$(curl -s "${url}/api/v1/user/repos" \
+        -X POST \
+        -H "Authorization: token ${token}" \
+        -H "Content-Type: application/json" \
+        -d '{"name":"__scope_test_delete_me__","private":true}' 2>/dev/null)
+
+    if echo "$response" | grep -q "required=\[write:user\]"; then
+        missing_scopes="${missing_scopes}write:user "
+    elif echo "$response" | grep -q '"id"'; then
+        # Repo was created, delete it
+        curl -s -X DELETE "${url}/api/v1/repos/$(parse_json_field "$response" "owner" | head -1)/$(parse_json_field "$response" "name")" \
+            -H "Authorization: token ${token}" >/dev/null 2>&1
+        # Try alternate extraction if owner parsing failed
+        local owner
+        owner=$(echo "$response" | grep -o '"login":"[^"]*"' | head -1 | sed 's/"login":"\([^"]*\)"/\1/')
+        if [ -n "$owner" ]; then
+            curl -s -X DELETE "${url}/api/v1/repos/${owner}/__scope_test_delete_me__" \
+                -H "Authorization: token ${token}" >/dev/null 2>&1
+        fi
+    fi
+
+    # Test read:user scope
+    response=$(curl -s "${url}/api/v1/user" \
+        -H "Authorization: token ${token}" 2>/dev/null)
+
+    if echo "$response" | grep -q "required=\[read:user\]"; then
+        missing_scopes="${missing_scopes}read:user "
+    fi
+
+    # Return results
+    if [ -n "$missing_scopes" ]; then
+        echo "$missing_scopes"
+        return 1
+    fi
+    return 0
+}
+
 # URL-encode a string
 url_encode() {
     local string="$1"
@@ -253,7 +298,17 @@ main() {
 
     print_section "Gitea API Token"
     print_info "Create a token at: ${gitea_url}/user/settings/applications"
-    print_info "Recommended scopes: repo, write:issue, delete_repo"
+    echo ""
+    echo "  Required scopes:"
+    echo "    • write:user        - Create personal repositories"
+    echo "    • write:repository  - Repository operations"
+    echo "    • read:user         - Verify token, get user info"
+    echo ""
+    echo "  Optional scopes:"
+    echo "    • delete_repo       - Delete repositories"
+    echo "    • write:issue       - Manage issues/PRs"
+    echo "    • write:organization - Organization repos"
+    echo ""
 
     while true; do
         prompt_with_default "API Token" "$existing_token" "api_token" "true"
@@ -267,6 +322,24 @@ main() {
         local verified_user
         if verified_user=$(test_api_token "$gitea_url" "$api_token"); then
             print_success "Token valid for user: $verified_user"
+
+            # Validate required scopes
+            echo -n "Validating token scopes... "
+            local missing
+            if missing=$(validate_token_scopes "$gitea_url" "$api_token"); then
+                print_success "All required scopes present"
+            else
+                print_error "Missing required scopes: $missing"
+                echo ""
+                print_info "Please create a new token with the required scopes listed above"
+                echo -n "Try again with a different token? [Y/n]: "
+                read retry
+                if [[ "$retry" =~ ^[Nn] ]]; then
+                    print_info "Continuing with limited token (some features may not work)"
+                    break
+                fi
+                continue
+            fi
             break
         else
             print_error "Token verification failed"

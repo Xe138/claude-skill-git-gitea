@@ -19,8 +19,21 @@ The setup wizard will prompt for:
 - **Gitea URL** - Your Gitea instance (e.g., https://git.example.com)
 - **Git username** - Name for commits
 - **Git email** - Email for commits
-- **API token** - For repository management via API
+- **API token** - For repository management via API (see required scopes below)
 - **Gitea login/password** - For git push/pull operations
+
+### Required API Token Scopes
+
+Create your token at `<your-gitea-url>/user/settings/applications` with these scopes:
+
+| Scope | Required | Purpose |
+|-------|----------|---------|
+| `write:user` | **Yes** | Create personal repositories |
+| `write:repository` | **Yes** | Repository operations (settings, branches) |
+| `read:user` | **Yes** | Verify token, get user info |
+| `delete_repo` | Optional | Delete repositories via API |
+| `write:issue` | Optional | Manage issues and pull requests |
+| `write:organization` | Optional | Create/manage organization repos |
 
 Configuration is stored in:
 - `~/.config/gitea/config` - Instance and identity settings
