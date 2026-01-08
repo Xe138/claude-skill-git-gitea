@@ -9,10 +9,12 @@ Manage local git repositories and remote Gitea instances.
 
 ## Initial Setup
 
-Run the setup script to configure all parameters:
+Find and run the setup script:
 
 ```bash
-~/.claude/skills/git-gitea/scripts/setup.sh
+# Find skill location (may vary by installation)
+SKILL_DIR=$(dirname "$(find ~/.claude/skills -name 'gitea-helper.sh' 2>/dev/null | head -1)")
+${SKILL_DIR}/setup.sh
 ```
 
 The setup wizard will prompt for:
@@ -56,9 +58,14 @@ This design ensures:
 
 ## Using the Helper Functions
 
-Source the helper script:
+Source the helper script (auto-detects paths):
 ```bash
-source ~/.claude/skills/git-gitea/scripts/gitea-helper.sh
+source "$(find ~/.claude/skills -name 'gitea-helper.sh' 2>/dev/null | head -1)"
+```
+
+Or if you know the skill directory:
+```bash
+source ~/.claude/skills/claude-skill-git-gitea/scripts/gitea-helper.sh
 ```
 
 ### Available Functions
@@ -97,7 +104,7 @@ curl -s "${GITEA_URL}/api/v1/user/repos" \
 
 ### Create and Push New Project
 ```bash
-source ~/.claude/skills/git-gitea/scripts/gitea-helper.sh
+source "$(find ~/.claude/skills -name 'gitea-helper.sh' 2>/dev/null | head -1)"
 gitea_init_project my-new-project "Project description"
 git add .
 git commit -m "Initial commit"
@@ -106,21 +113,23 @@ git push -u origin main
 
 ### Clone Existing Repository
 ```bash
-source ~/.claude/skills/git-gitea/scripts/gitea-helper.sh
+source "$(find ~/.claude/skills -name 'gitea-helper.sh' 2>/dev/null | head -1)"
 gitea_clone existing-repo
 ```
 
 ### List All Repositories
 ```bash
-source ~/.claude/skills/git-gitea/scripts/gitea-helper.sh
+source "$(find ~/.claude/skills -name 'gitea-helper.sh' 2>/dev/null | head -1)"
 gitea_list_repos
 ```
 
 ## Reconfiguring
 
-To change any settings, re-run the setup script:
+To change any settings, re-run the setup script (or source the helper and run `gitea_help` to see the path):
 ```bash
-~/.claude/skills/git-gitea/scripts/setup.sh
+# After sourcing helper, the path is shown in output
+# Or find it directly:
+$(dirname "$(find ~/.claude/skills -name 'gitea-helper.sh' 2>/dev/null | head -1)")/setup.sh
 ```
 
 Existing values are shown as defaults - press Enter to keep them.

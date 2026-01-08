@@ -2,6 +2,10 @@
 # Gitea Helper Script
 # Usage: source this script or run individual functions
 
+# Skill directory (auto-detected from script location)
+GITEA_SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+GITEA_SETUP_SCRIPT="${GITEA_SKILL_DIR}/scripts/setup.sh"
+
 # Configuration paths
 CONFIG_DIR="${HOME}/.config/gitea"
 CONFIG_FILE="${CONFIG_DIR}/config"
@@ -27,7 +31,7 @@ load_config
 require_config() {
     if [ -z "$GITEA_URL" ]; then
         echo "Error: Gitea not configured. Run setup first:" >&2
-        echo "  ~/.claude/skills/git-gitea/scripts/setup.sh" >&2
+        echo "  $GITEA_SETUP_SCRIPT" >&2
         return 1
     fi
     return 0
@@ -93,7 +97,7 @@ get_gitea_token() {
         cat ~/.gitea-token
     else
         echo "Error: No Gitea token found." >&2
-        echo "Run setup: ~/.claude/skills/git-gitea/scripts/setup.sh" >&2
+        echo "Run setup: $GITEA_SETUP_SCRIPT" >&2
         return 1
     fi
 }
@@ -124,7 +128,7 @@ gitea_check_config() {
 
     if [ "$missing" -eq 1 ]; then
         echo ""
-        echo "Run setup: ~/.claude/skills/git-gitea/scripts/setup.sh"
+        echo "Run setup: $GITEA_SETUP_SCRIPT"
         return 1
     fi
 
@@ -140,7 +144,7 @@ gitea_check_config() {
 gitea_configure_git() {
     if [ -z "$GITEA_USERNAME" ] || [ -z "$GIT_EMAIL" ]; then
         echo "Error: Configuration not found. Run setup first." >&2
-        echo "  ~/.claude/skills/git-gitea/scripts/setup.sh" >&2
+        echo "  $GITEA_SETUP_SCRIPT" >&2
         return 1
     fi
 
@@ -338,19 +342,19 @@ gitea_config() {
     echo "  Token:      ${TOKEN_FILE}"
     echo ""
     echo "To reconfigure, run:"
-    echo "  ~/.claude/skills/git-gitea/scripts/setup.sh"
+    echo "  $GITEA_SETUP_SCRIPT"
 }
 
 # Print help
 gitea_help() {
+    echo "Git-Gitea Skill Helper Functions"
+    echo ""
+    echo "SETUP:"
+    echo "  Run initial setup:"
+    echo "    $GITEA_SETUP_SCRIPT"
+    echo ""
+    echo "  This configures:"
     cat << 'EOF'
-Git-Gitea Skill Helper Functions
-
-SETUP:
-  Run initial setup:
-    ~/.claude/skills/git-gitea/scripts/setup.sh
-
-  This configures:
     • Gitea instance URL
     • Git identity (username, email)
     • API token for repository management
@@ -395,7 +399,7 @@ if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
         echo "Gitea helper loaded for: $GITEA_URL"
     else
         echo "Gitea helper loaded (not configured)"
-        echo "Run setup: ~/.claude/skills/git-gitea/scripts/setup.sh"
+        echo "Run setup: $GITEA_SETUP_SCRIPT"
     fi
     echo "Run 'gitea_help' for usage."
 fi
