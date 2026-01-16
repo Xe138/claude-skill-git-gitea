@@ -84,6 +84,8 @@ source ~/.claude/skills/claude-skill-git-gitea/scripts/gitea-helper.sh
 - `gitea_init_project NAME [DESC]` - Create repo & configure local git
 - `gitea_clone REPO [OWNER]` - Clone a repository
 
+**IMPORTANT - Repository Visibility:** When creating a new repository, ALWAYS ask the user whether it should be **private** or **public** if not explicitly specified. Never assume visibility - prompt with options like "Should this repository be private or public?"
+
 ## Direct API Usage
 
 If needed, make API calls directly using the stored token:
