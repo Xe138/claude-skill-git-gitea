@@ -58,9 +58,31 @@ PATCH /repos/{owner}/{repo}/issues/{index}         # Update issue
 GET  /repos/{owner}/{repo}/pulls                   # List PRs
 POST /repos/{owner}/{repo}/pulls                   # Create PR
 GET  /repos/{owner}/{repo}/pulls/{index}           # Get PR
+GET  /repos/{owner}/{repo}/pulls/{index}.diff      # Get PR diff (plain text)
 PATCH /repos/{owner}/{repo}/pulls/{index}          # Update PR
 POST /repos/{owner}/{repo}/pulls/{index}/merge     # Merge PR
 ```
+
+#### List PRs Query Parameters
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `state` | string | `open` | Filter by state: `open`, `closed`, `all` |
+| `sort` | string | `newest` | Sort: `newest`, `oldest`, `recentupdate` |
+| `labels` | string | | Comma-separated label IDs |
+| `milestone` | int | | Filter by milestone ID |
+| `limit` | int | 50 | Page size (max 50) |
+| `page` | int | 1 | Page number |
+
+#### Merge PR Request Body
+```json
+{
+  "Do": "merge",
+  "delete_branch_after_merge": true,
+  "merge_message_field": "optional commit message"
+}
+```
+- `Do` options: `merge`, `rebase`, `squash`, `rebase-merge`
+- `delete_branch_after_merge`: removes the head branch after merge
 
 ## Releases
 

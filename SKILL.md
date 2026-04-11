@@ -34,7 +34,7 @@ Create your token at `<your-gitea-url>/user/settings/applications` with these sc
 | `write:repository` | **Yes** | Repository operations (settings, branches) |
 | `read:user` | **Yes** | Verify token, get user info |
 | `delete_repo` | Optional | Delete repositories via API |
-| `write:issue` | Optional | Manage issues and pull requests |
+| `write:issue` | **Yes** (for PRs) | Manage issues and pull requests |
 | `write:organization` | Optional | Create/manage organization repos |
 
 Configuration is stored in:
@@ -86,6 +86,14 @@ source ~/.claude/skills/claude-skill-git-gitea/scripts/gitea-helper.sh
 
 **IMPORTANT - Repository Visibility:** When creating a new repository, ALWAYS ask the user whether it should be **private** or **public** if not explicitly specified. Never assume visibility - prompt with options like "Should this repository be private or public?"
 
+**Pull Request Management:**
+- `gitea_list_prs [OWNER] REPO [STATE]` - List pull requests (state: open/closed/all)
+- `gitea_get_pr [OWNER] REPO INDEX` - Get PR details (JSON)
+- `gitea_pr_diff [OWNER] REPO INDEX` - Show PR diff
+- `gitea_merge_pr [OWNER] REPO INDEX [TYPE]` - Merge a pull request (type: merge/rebase/squash)
+- `gitea_close_pr [OWNER] REPO INDEX` - Close PR without merging
+- `gitea_list_renovate_prs [OWNER]` - List all open Renovate bot PRs across repos
+
 ## Direct API Usage
 
 If needed, make API calls directly using the stored token:
@@ -124,6 +132,32 @@ gitea_clone existing-repo
 source "$(find ~/.claude/skills -name 'gitea-helper.sh' 2>/dev/null | head -1)"
 gitea_list_repos
 ```
+
+### Renovate PR Workflow
+
+Process Renovate bot PRs that update Docker image versions across repositories.
+
+**1. List all pending Renovate PRs:**
+```bash
+source "$(find ~/.claude/skills -name 'gitea-helper.sh' 2>/dev/null | head -1)"
+gitea_list_renovate_prs
+```
+
+**2. Review a specific PR diff:**
+```bash
+gitea_pr_diff Bill Grafana-docker 45
+```
+
+**3. Merge an approved PR:**
+```bash
+gitea_merge_pr Bill Grafana-docker 45
+```
+Branches are automatically deleted after merge. Renovate recreates them as needed.
+
+**4. Deploy to the target host:**
+For deploying merged changes to Docker stacks on inkling/shellington, see the docker-compose-config skill's "Deploying Updates from Merged PRs" section.
+
+**Environment variable:** Set `RENOVATE_USER` to override the default bot username (`renovate-bot`).
 
 ## Reconfiguring
 

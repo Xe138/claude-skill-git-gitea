@@ -85,6 +85,29 @@ parse_repo_list() {
     echo "(JSON parsing requires jq or node)"
 }
 
+# Parse JSON array for PR listing (reads from stdin)
+parse_pr_list() {
+    if command -v jq &>/dev/null; then
+        jq -r '.[] | "#\(.number)\t\(.title)\t\(.state)\t\(.user.login)\t\(.created_at)"' 2>/dev/null
+        return
+    fi
+
+    if command -v node &>/dev/null; then
+        node -e "
+            let d='';process.stdin.on('data',c=>d+=c);
+            process.stdin.on('end',()=>{
+                try{
+                    JSON.parse(d).forEach(p=>console.log('#'+p.number+'\t'+p.title+'\t'+p.state+'\t'+p.user.login+'\t'+p.created_at));
+                }catch(e){}
+            });
+        " 2>/dev/null
+        return
+    fi
+
+    cat > /dev/null
+    echo "(JSON parsing requires jq or node)"
+}
+
 # Get Gitea token from secure storage
 get_gitea_token() {
     require_config || return 1
@@ -324,6 +347,212 @@ gitea_clone() {
     git clone "${GITEA_URL}/${owner}/${repo}.git"
 }
 
+# ========================================
+# Pull Request Management
+# ========================================
+
+# List pull requests for a repository
+# Usage: gitea_list_prs [OWNER] REPO [STATE]
+gitea_list_prs() {
+    local owner="${1:-}"
+    local repo="${2:-}"
+    local state="${3:-open}"
+    local token
+
+    if [ -z "$repo" ]; then
+        if [ -z "$owner" ]; then
+            echo "Usage: gitea_list_prs [OWNER] REPO [STATE]" >&2
+            echo "   STATE: open (default), closed, all" >&2
+            return 1
+        fi
+        # If only one arg, treat as repo name
+        repo="$owner"
+        owner=$(get_gitea_username)
+    fi
+
+    token=$(get_gitea_token) || return 1
+
+    curl -s "${GITEA_API}/repos/${owner}/${repo}/pulls?state=${state}&limit=50" \
+        -H "Authorization: token ${token}" | parse_pr_list
+}
+
+# Get details for a single pull request
+# Usage: gitea_get_pr [OWNER] REPO INDEX
+gitea_get_pr() {
+    local owner="${1:-}"
+    local repo="${2:-}"
+    local index="${3:-}"
+    local token
+
+    if [ -z "$index" ]; then
+        if [ -n "$repo" ] && [ -z "$index" ]; then
+            # Two args: repo and index
+            index="$repo"
+            repo="$owner"
+            owner=$(get_gitea_username)
+        else
+            echo "Usage: gitea_get_pr [OWNER] REPO INDEX" >&2
+            return 1
+        fi
+    fi
+
+    token=$(get_gitea_token) || return 1
+
+    curl -s "${GITEA_API}/repos/${owner}/${repo}/pulls/${index}" \
+        -H "Authorization: token ${token}"
+}
+
+# Show diff for a pull request
+# Usage: gitea_pr_diff [OWNER] REPO INDEX
+gitea_pr_diff() {
+    local owner="${1:-}"
+    local repo="${2:-}"
+    local index="${3:-}"
+    local token
+
+    if [ -z "$index" ]; then
+        if [ -n "$repo" ] && [ -z "$index" ]; then
+            index="$repo"
+            repo="$owner"
+            owner=$(get_gitea_username)
+        else
+            echo "Usage: gitea_pr_diff [OWNER] REPO INDEX" >&2
+            return 1
+        fi
+    fi
+
+    token=$(get_gitea_token) || return 1
+
+    curl -s "${GITEA_API}/repos/${owner}/${repo}/pulls/${index}.diff" \
+        -H "Authorization: token ${token}"
+}
+
+# Merge a pull request
+# Usage: gitea_merge_pr [OWNER] REPO INDEX [MERGE_TYPE]
+# MERGE_TYPE: merge (default), rebase, squash, rebase-merge
+gitea_merge_pr() {
+    local owner="${1:-}"
+    local repo="${2:-}"
+    local index="${3:-}"
+    local merge_type="${4:-merge}"
+    local token
+
+    if [ -z "$index" ]; then
+        if [ -n "$repo" ] && [ -z "$index" ]; then
+            index="$repo"
+            repo="$owner"
+            owner=$(get_gitea_username)
+            merge_type="${3:-merge}"
+        else
+            echo "Usage: gitea_merge_pr [OWNER] REPO INDEX [MERGE_TYPE]" >&2
+            echo "   MERGE_TYPE: merge (default), rebase, squash, rebase-merge" >&2
+            return 1
+        fi
+    fi
+
+    token=$(get_gitea_token) || return 1
+
+    curl -s -X POST "${GITEA_API}/repos/${owner}/${repo}/pulls/${index}/merge" \
+        -H "Authorization: token ${token}" \
+        -H "Content-Type: application/json" \
+        -d "{
+            \"Do\": \"${merge_type}\",
+            \"delete_branch_after_merge\": true
+        }"
+}
+
+# Close a pull request without merging
+# Usage: gitea_close_pr [OWNER] REPO INDEX
+gitea_close_pr() {
+    local owner="${1:-}"
+    local repo="${2:-}"
+    local index="${3:-}"
+    local token
+
+    if [ -z "$index" ]; then
+        if [ -n "$repo" ] && [ -z "$index" ]; then
+            index="$repo"
+            repo="$owner"
+            owner=$(get_gitea_username)
+        else
+            echo "Usage: gitea_close_pr [OWNER] REPO INDEX" >&2
+            return 1
+        fi
+    fi
+
+    token=$(get_gitea_token) || return 1
+
+    curl -s -X PATCH "${GITEA_API}/repos/${owner}/${repo}/pulls/${index}" \
+        -H "Authorization: token ${token}" \
+        -H "Content-Type: application/json" \
+        -d '{"state": "closed"}'
+}
+
+# List all open Renovate bot PRs across repositories
+# Usage: gitea_list_renovate_prs [OWNER]
+gitea_list_renovate_prs() {
+    local bot_user="${RENOVATE_USER:-renovate-bot}"
+    local token page total_prs
+    local tmpfile tmpfile_pr tmpfile_names tmpfile_out
+    page=1
+    total_prs=0
+
+    token=$(get_gitea_token) || return 1
+    tmpfile=$(mktemp)
+    tmpfile_pr=$(mktemp)
+    tmpfile_names=$(mktemp)
+    tmpfile_out=$(mktemp)
+
+    echo "Scanning repos for open PRs from ${bot_user}..."
+    echo ""
+    printf "%-30s %-6s %s\n" "REPOSITORY" "PR#" "TITLE"
+    printf "%-30s %-6s %s\n" "----------" "---" "-----"
+
+    while true; do
+        curl -s "${GITEA_API}/repos/search?limit=50&page=${page}" \
+            -H "Authorization: token ${token}" > "$tmpfile"
+
+        local repo_count=$(jq -r '.data | length' "$tmpfile" 2>/dev/null)
+
+        if [ -z "$repo_count" ] || [ "$repo_count" = "0" ] || [ "$repo_count" = "null" ]; then
+            break
+        fi
+
+        # Extract repo names with open PRs to a file
+        jq -r '.data[] | select(.open_pr_counter > 0) | .full_name' "$tmpfile" > "$tmpfile_names" 2>/dev/null
+
+        while IFS= read -r full_name; do
+            [ -z "$full_name" ] && continue
+
+            curl -s "${GITEA_API}/repos/${full_name}/pulls?state=open&limit=50" \
+                -H "Authorization: token ${token}" > "$tmpfile_pr"
+
+            # Extract renovate-bot PRs to output file
+            jq -r --arg bot "$bot_user" \
+                '.[] | select(.user.login == $bot) | "\(.number)\t\(.title)"' \
+                "$tmpfile_pr" > "$tmpfile_out" 2>/dev/null
+
+            if [ -s "$tmpfile_out" ]; then
+                local repo_short="${full_name#*/}"
+                while IFS=$'\t' read -r num title; do
+                    [ -z "$num" ] && continue
+                    printf "%-30s #%-5s %s\n" "$repo_short" "$num" "$title"
+                    total_prs=$((total_prs + 1))
+                done < "$tmpfile_out"
+            fi
+        done < "$tmpfile_names"
+
+        if [ "$repo_count" -lt 50 ]; then
+            break
+        fi
+        page=$((page + 1))
+    done
+
+    rm -f "$tmpfile" "$tmpfile_pr" "$tmpfile_names" "$tmpfile_out"
+    echo ""
+    echo "Total: ${total_prs} open Renovate PRs"
+}
+
 # Print current configuration
 gitea_config() {
     echo "Git-Gitea Skill Configuration"
@@ -384,12 +613,22 @@ FUNCTIONS:
     gitea_init_project NAME [DESC]          - Create repo & configure local git
     gitea_clone REPO [OWNER]                - Clone a repository
 
+  Pull Request Management:
+    gitea_list_prs [OWNER] REPO [STATE]     - List PRs (state: open/closed/all)
+    gitea_get_pr [OWNER] REPO INDEX         - Get PR details (JSON)
+    gitea_pr_diff [OWNER] REPO INDEX        - Show PR diff
+    gitea_merge_pr [OWNER] REPO INDEX [TYPE]- Merge PR (type: merge/rebase/squash)
+    gitea_close_pr [OWNER] REPO INDEX       - Close PR without merging
+    gitea_list_renovate_prs [OWNER]         - List all open Renovate bot PRs
+
 EXAMPLES:
   gitea_create_repo my-project "A cool project" true
   gitea_list_repos
   gitea_init_project new-app "My new application"
   gitea_clone existing-repo
   gitea_repo_info my-project
+  gitea_list_renovate_prs
+  gitea_merge_pr Bill Grafana-docker 45
 EOF
 }
 
