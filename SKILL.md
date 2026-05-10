@@ -56,6 +56,45 @@ This design ensures:
 - API operations use scoped, revocable tokens
 - Credentials and tokens are stored separately with proper permissions
 
+## Quick Reference
+
+Source the helper first, then use these commands:
+
+```bash
+source ~/.claude/skills/claude-skill-git-gitea/scripts/gitea-helper.sh
+```
+
+| Task | Command |
+|------|---------|
+| List open PRs | `gitea_list_prs [OWNER] REPO` |
+| Review PR diff | `gitea_pr_diff OWNER REPO INDEX` |
+| Merge PR | `gitea_merge_pr OWNER REPO INDEX` |
+| All Renovate PRs | `gitea_list_renovate_prs` |
+| List repos | `gitea_list_repos` |
+| Create repo | `gitea_create_repo NAME [DESC] [PRIVATE]` |
+| Clone repo | `gitea_clone REPO [OWNER]` |
+| PR details (JSON) | `gitea_get_pr [OWNER] REPO INDEX` |
+
+## Important: Always Source the Helper First
+
+When performing ANY Gitea operation, ALWAYS source the helper script as your first step rather than making raw curl/API calls. The helper functions handle authentication, JSON parsing (via jq/node with fallbacks), pagination, and formatted output.
+
+Raw curl + manual JSON parsing is error-prone — especially on NixOS where shell quoting with nix-shell and inline Python/jq causes escaping issues.
+
+**Anti-pattern (DO NOT DO THIS):**
+```bash
+# Wrong: raw curl + manual parsing = quoting nightmares
+TOKEN=$(cat ~/.config/gitea/token)
+curl -s -H "Authorization: token $TOKEN" ".../pulls" | python3 -c "..."
+```
+
+**Correct pattern:**
+```bash
+# Right: one-liner with full formatting
+source ~/.claude/skills/claude-skill-git-gitea/scripts/gitea-helper.sh
+gitea_list_prs Bill HomeAssistant-compose
+```
+
 ## Using the Helper Functions
 
 Source the helper script (auto-detects paths):
@@ -94,9 +133,9 @@ source ~/.claude/skills/claude-skill-git-gitea/scripts/gitea-helper.sh
 - `gitea_close_pr [OWNER] REPO INDEX` - Close PR without merging
 - `gitea_list_renovate_prs [OWNER]` - List all open Renovate bot PRs across repos
 
-## Direct API Usage
+## Direct API Usage (Advanced - Prefer Helper Functions)
 
-If needed, make API calls directly using the stored token:
+Only use direct API calls when the helper functions don't cover your use case:
 
 ```bash
 # Read token
