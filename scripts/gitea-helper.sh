@@ -488,6 +488,67 @@ gitea_close_pr() {
         -d '{"state": "closed"}'
 }
 
+# Tick the Renovate "rebase-check" checkbox on a PR.
+# Editing the body to [x] tells Renovate to rebase/retry (or close-if-obsolete)
+# on its next run. Used for superseded/conflicted Renovate PRs instead of closing.
+gitea_pr_check_rebase() {
+    local owner="${1:-}" repo="${2:-}" index="${3:-}" token
+
+    # optional-owner shorthand, matching gitea_merge_pr/gitea_get_pr
+    if [ -z "$index" ]; then
+        if [ -n "$repo" ] && [ -z "$index" ]; then
+            index="$repo"; repo="$owner"; owner=$(get_gitea_username)
+        else
+            echo "Usage: gitea_pr_check_rebase [OWNER] REPO INDEX" >&2
+            return 1
+        fi
+    fi
+
+    token=$(get_gitea_token) || return 1
+
+    local pr body new_body payload http_code
+    pr=$(curl -s "${GITEA_API}/repos/${owner}/${repo}/pulls/${index}" \
+        -H "Authorization: token ${token}")
+
+    if command -v jq &>/dev/null; then
+        body=$(printf '%s' "$pr" | jq -r '.body // empty')
+    elif command -v node &>/dev/null; then
+        body=$(printf '%s' "$pr" | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{process.stdout.write(JSON.parse(d).body||'')}catch(e){}})")
+    else
+        echo "gitea_pr_check_rebase requires jq or node" >&2; return 1
+    fi
+
+    if [ -z "$body" ]; then
+        echo "PR #${index}: could not read body (check owner/repo/index)" >&2; return 1
+    fi
+    if printf '%s' "$body" | grep -q -- '- \[x\] <!-- rebase-check -->'; then
+        echo "PR #${index}: rebase-check already ticked"; return 0
+    fi
+    if ! printf '%s' "$body" | grep -q -- '<!-- rebase-check -->'; then
+        echo "PR #${index}: no rebase-check checkbox (not a Renovate PR?)" >&2; return 1
+    fi
+
+    new_body=$(printf '%s' "$body" | sed 's/- \[ \] <!-- rebase-check -->/- [x] <!-- rebase-check -->/')
+
+    if command -v jq &>/dev/null; then
+        payload=$(jq -n --arg b "$new_body" '{body:$b}')
+    else
+        payload=$(printf '%s' "$new_body" | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>process.stdout.write(JSON.stringify({body:d})))")
+    fi
+
+    http_code=$(curl -s -o /dev/null -w '%{http_code}' \
+        -X PATCH "${GITEA_API}/repos/${owner}/${repo}/pulls/${index}" \
+        -H "Authorization: token ${token}" \
+        -H "Content-Type: application/json" \
+        -d "$payload")
+    if [ "$http_code" -ge 200 ] 2>/dev/null && [ "$http_code" -lt 300 ] 2>/dev/null; then
+        echo "PR #${index}: rebase-check ticked ✓"
+    else
+        echo "PR #${index}: rebase-check FAILED (HTTP ${http_code:-no response})" >&2
+        return 1
+    fi
+}
+
 # List all open Renovate bot PRs across repositories
 # Usage: gitea_list_renovate_prs [OWNER]
 gitea_list_renovate_prs() {
@@ -619,6 +680,7 @@ FUNCTIONS:
     gitea_pr_diff [OWNER] REPO INDEX        - Show PR diff
     gitea_merge_pr [OWNER] REPO INDEX [TYPE]- Merge PR (type: merge/rebase/squash)
     gitea_close_pr [OWNER] REPO INDEX       - Close PR without merging
+    gitea_pr_check_rebase [OWNER] REPO INDEX- Tick Renovate rebase-check checkbox
     gitea_list_renovate_prs [OWNER]         - List all open Renovate bot PRs
 
 EXAMPLES:

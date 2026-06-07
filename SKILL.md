@@ -69,6 +69,7 @@ source ~/.claude/skills/claude-skill-git-gitea/scripts/gitea-helper.sh
 | List open PRs | `gitea_list_prs [OWNER] REPO` |
 | Review PR diff | `gitea_pr_diff OWNER REPO INDEX` |
 | Merge PR | `gitea_merge_pr OWNER REPO INDEX` |
+| Tick rebase-check on PR | `gitea_pr_check_rebase OWNER REPO INDEX` |
 | All Renovate PRs | `gitea_list_renovate_prs` |
 | List repos | `gitea_list_repos` |
 | Create repo | `gitea_create_repo NAME [DESC] [PRIVATE]` |
@@ -131,6 +132,7 @@ source ~/.claude/skills/claude-skill-git-gitea/scripts/gitea-helper.sh
 - `gitea_pr_diff [OWNER] REPO INDEX` - Show PR diff
 - `gitea_merge_pr [OWNER] REPO INDEX [TYPE]` - Merge a pull request (type: merge/rebase/squash)
 - `gitea_close_pr [OWNER] REPO INDEX` - Close PR without merging
+- `gitea_pr_check_rebase [OWNER] REPO INDEX` - Tick the Renovate rebase-check checkbox (drives rebase/retry; use for superseded PRs instead of closing)
 - `gitea_list_renovate_prs [OWNER]` - List all open Renovate bot PRs across repos
 
 ## Direct API Usage (Advanced - Prefer Helper Functions)
@@ -197,6 +199,29 @@ Branches are automatically deleted after merge. Renovate recreates them as neede
 For deploying merged changes to Docker stacks on inkling/shellington, see the docker-compose-config skill's "Deploying Updates from Merged PRs" section.
 
 **Environment variable:** Set `RENOVATE_USER` to override the default bot username (`renovate-bot`).
+
+### Renovate PR Review Rules
+
+When reviewing a repo's Renovate PRs, sequence merges as follows:
+
+1. **Version bump beats pin/digest re-pin.** If two PRs touch the same image and one
+   bumps the version while another only re-pins the *old* version's digest, merge the
+   version bump and **rebase-check** the re-pin (it's superseded). Do not merge it; do
+   not close it.
+2. **Minor/patch before major.** Within the same image, order lower-risk updates first.
+   Major bumps and DB-engine major bumps (e.g. Postgres `pg_upgrade`) are hard warnings —
+   surface them and get explicit acknowledgement before merging.
+3. **Independent images** (different services) merge in any order.
+
+**Superseded/remaining PRs:** tick the rebase-check box with `gitea_pr_check_rebase`.
+Renovate reconciles or closes them on its next run. (Auto-mode blocks closing PRs the
+agent didn't create, so closing is the wrong tool anyway.)
+
+**Stale-`mergeable` quirk:** after merging a PR, Gitea may briefly report the next PR as
+`mergeable:false` or return `{"message":"Please try again later"}` while it recomputes
+the base. This is **not** a real conflict. Re-verify the target image line on the default
+branch (`raw/docker-compose.yml`); if the line still matches the PR's "from" value, wait
+a few seconds and retry the merge. Only treat it as a real conflict if the line diverged.
 
 ## Reconfiguring
 
