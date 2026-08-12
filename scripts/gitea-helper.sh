@@ -683,6 +683,10 @@ FUNCTIONS:
     gitea_pr_check_rebase [OWNER] REPO INDEX- Tick Renovate rebase-check checkbox
     gitea_list_renovate_prs [OWNER]         - List all open Renovate bot PRs
 
+  Instance Health & Security:
+    gitea_health [OWNER/REPO]               - Verify instance actually SERVES (real clone)
+    gitea_audit_visibility                  - Public/private audit + secret-file scan
+
 EXAMPLES:
   gitea_create_repo my-project "A cool project" true
   gitea_list_repos
@@ -692,6 +696,182 @@ EXAMPLES:
   gitea_list_renovate_prs
   gitea_merge_pr Bill Grafana-docker 45
 EOF
+}
+
+
+# ---------------------------------------------------------------------------
+# Instance health & security
+#
+# Added 2026-08-12 after an incident in which Gitea's container healthcheck
+# reported "healthy", /api/healthz passed both DB and cache pings, and the
+# container had 3 weeks of uptime -- while 100% of HTTP git clones had been
+# failing for 30 hours. Liveness probes do not test whether the server can do
+# its job. gitea_health exercises a real clone, which is the only check that
+# would have caught it.
+# ---------------------------------------------------------------------------
+
+# Verify the instance is actually serving, not merely alive.
+# Usage: gitea_health [OWNER/REPO]   (defaults to the first repo the token sees)
+gitea_health() {
+    require_config || return 1
+
+    local target="$1" fails=0 tmp rc
+
+    _gh_check() {  # label, expected, actual
+        if [ "$2" = "$3" ]; then
+            printf '  \033[32mOK\033[0m   %-38s %s\n' "$1" "$3"
+        else
+            printf '  \033[31mFAIL\033[0m %-38s got %s, want %s\n' "$1" "$3" "$2"
+            fails=$((fails + 1))
+        fi
+    }
+
+    echo "Gitea health: $GITEA_URL"
+    echo
+
+    # --- liveness (necessary but NOT sufficient -- see header comment) ---
+    _gh_check "GET /api/v1/version" 200 \
+        "$(curl -s -o /dev/null -w '%{http_code}' "${GITEA_API}/version")"
+    _gh_check "GET /api/healthz" 200 \
+        "$(curl -s -o /dev/null -w '%{http_code}' "${GITEA_URL}/api/healthz")"
+
+    # --- the internal API must NOT be reachable from outside ---
+    # A 200 here means the private API is exposed through your reverse proxy.
+    local ic
+    ic="$(curl -s -o /dev/null -w '%{http_code}' "${GITEA_URL}/api/internal/dummy")"
+    if [ "$ic" = "200" ]; then
+        printf '  \033[31mFAIL\033[0m %-38s %s  <-- private API EXPOSED\n' \
+            "GET /api/internal/dummy" "$ic"
+        fails=$((fails + 1))
+    else
+        printf '  \033[32mOK\033[0m   %-38s %s (blocked)\n' "GET /api/internal/dummy" "$ic"
+    fi
+
+    # --- authenticated API ---
+    _gh_check "authenticated /user" 200 \
+        "$(curl -s -o /dev/null -w '%{http_code}' \
+            -H "Authorization: token $(get_gitea_token)" "${GITEA_API}/user")"
+
+    # --- THE REAL CHECK: can it actually serve git? ---
+    if [ -z "$target" ]; then
+        target="$(gitea_list_repos 2>/dev/null | grep -oE '[A-Za-z0-9._-]+/[A-Za-z0-9._-]+' | head -1)"
+    fi
+    if [ -z "$target" ]; then
+        printf '  \033[33mSKIP\033[0m %-38s no repo to test\n' "git clone"
+    else
+        tmp="$(mktemp -d)"
+        if git clone -q --depth 1 "${GITEA_URL}/${target}.git" "$tmp/r" 2>"$tmp/err"; then
+            local n; n="$(find "$tmp/r" -mindepth 1 -maxdepth 1 ! -name .git | wc -l)"
+            printf '  \033[32mOK\033[0m   %-38s %s (%s entries)\n' "git clone" "$target" "$n"
+        else
+            printf '  \033[31mFAIL\033[0m %-38s %s\n' "git clone" "$target"
+            sed 's/^/         /' "$tmp/err" | head -4
+            fails=$((fails + 1))
+        fi
+        rm -rf "$tmp"
+    fi
+
+    unset -f _gh_check
+    echo
+    if [ "$fails" -eq 0 ]; then
+        echo "All checks passed."
+        return 0
+    fi
+    echo "$fails check(s) FAILED."
+    echo "Server-side error rate (run on the Docker host):"
+    echo "  docker logs gitea --since 1h 2>&1 | grep -ciE '\\[E\\]|fatal'"
+    return 1
+}
+
+# Audit repository visibility and scan public repos for exposed secrets.
+# Catches two things: visibility drift (a repo you believe is private but
+# isn't) and secret-shaped files reachable without authentication.
+# Usage: gitea_audit_visibility [--quiet]
+gitea_audit_visibility() {
+    require_config || return 1
+
+    if ! command -v jq &>/dev/null; then
+        echo "Error: gitea_audit_visibility requires jq" >&2
+        return 1
+    fi
+
+    # All locals declared once, up front.
+    local token list page body chunk private full br tree hits
+    local pub=0 priv=0 findings=0 scanned=0
+
+    token="$(get_gitea_token)"
+    list="$(mktemp)"
+
+    echo "Repository visibility audit: $GITEA_URL"
+    echo
+
+    # Collect every repo the token can see, into a temp file (owner/name + flag).
+    page=1
+    while [ "$page" -le 20 ]; do
+        body="$(curl -s -H "Authorization: token ${token}" \
+                "${GITEA_API}/user/repos?limit=50&page=${page}")"
+        [ -z "$body" ] && break
+        chunk="$(printf '%s' "$body" | jq -r '.[] | "\(.private)\t\(.full_name)"' 2>/dev/null)"
+        [ -z "$chunk" ] && break
+        printf '%s\n' "$chunk" >> "$list"
+        page=$((page + 1))
+    done
+
+    echo "PUBLIC repositories (anonymously readable):"
+    while IFS=$'\t' read -r private full; do
+        [ -z "$full" ] && continue
+        if [ "$private" = "false" ]; then
+            pub=$((pub + 1))
+            printf '  %s\n' "$full"
+        else
+            priv=$((priv + 1))
+        fi
+    done < "$list"
+    [ "$pub" -eq 0 ] && echo "  (none)"
+    echo
+    printf 'Totals: %d public / %d private\n\n' "$pub" "$priv"
+    echo "Review that list: any repo you believed was private is visibility drift."
+    echo
+
+    # Secret-shaped filenames in public repos, via the tree API.
+    # Deliberately excludes .example/.sample/.template/.dist -- those are
+    # committed templates, not secrets, and matching them buries real hits.
+    local secret_re='(^|/)(\.env|\.envrc|secrets?\.(ya?ml|json|env)|.*\.pem|.*\.key|id_rsa|id_ed25519|credentials|.*\.p12|.*\.pfx|app\.ini|\.netrc|\.npmrc|\.pypirc)$'
+
+    echo "Scanning public repos for secret-shaped files..."
+    while IFS=$'\t' read -r private full; do
+        [ -z "$full" ] && continue
+        [ "$private" = "false" ] || continue
+        scanned=$((scanned + 1))
+        br="$(curl -s -H "Authorization: token ${token}" "${GITEA_API}/repos/${full}" \
+              | jq -r '.default_branch // empty' 2>/dev/null)"
+        [ -z "$br" ] && continue
+        tree="$(curl -s -H "Authorization: token ${token}" \
+                "${GITEA_API}/repos/${full}/git/trees/${br}?recursive=true&per_page=1000" \
+                | jq -r '.tree[]?.path // empty' 2>/dev/null)"
+        [ -z "$tree" ] && continue
+        hits="$(printf '%s\n' "$tree" | grep -iE "$secret_re" | head -5)"
+        if [ -n "$hits" ]; then
+            findings=$((findings + 1))
+            printf '  \033[33m%s\033[0m\n' "$full"
+            printf '%s\n' "$hits" | sed 's/^/      /'
+        fi
+    done < "$list"
+
+    rm -f "$list"
+
+    printf '\nScanned %d public repo(s).\n' "$scanned"
+    if [ "$findings" -eq 0 ]; then
+        echo "No secret-shaped filenames found."
+    else
+        echo "$findings repo(s) flagged -- filename matches are candidates, not"
+        echo "confirmed leaks. Inspect each before acting."
+    fi
+    echo
+    echo "LIMITATION: this scans the default branch only. A secret committed and"
+    echo "later deleted still lives in history. To check history on a clone:"
+    echo "  git log --all --diff-filter=A --name-only --pretty=format: | sort -u"
+    return 0
 }
 
 # If script is sourced, show available functions

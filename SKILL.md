@@ -75,6 +75,8 @@ source ~/.claude/skills/claude-skill-git-gitea/scripts/gitea-helper.sh
 | Create repo | `gitea_create_repo NAME [DESC] [PRIVATE]` |
 | Clone repo | `gitea_clone REPO [OWNER]` |
 | PR details (JSON) | `gitea_get_pr [OWNER] REPO INDEX` |
+| **Check instance health** | `gitea_health [OWNER/REPO]` |
+| **Audit repo visibility + secrets** | `gitea_audit_visibility` |
 
 ## Important: Always Source the Helper First
 
@@ -125,6 +127,52 @@ source ~/.claude/skills/claude-skill-git-gitea/scripts/gitea-helper.sh
 - `gitea_clone REPO [OWNER]` - Clone a repository
 
 **IMPORTANT - Repository Visibility:** When creating a new repository, ALWAYS ask the user whether it should be **private** or **public** if not explicitly specified. Never assume visibility - prompt with options like "Should this repository be private or public?"
+
+**Instance Health & Audit:**
+- `gitea_health [OWNER/REPO]` - Verify the instance is actually **serving**, not merely alive
+- `gitea_audit_visibility` - List public vs private repos and scan public ones for secret-shaped files
+
+## Checking Instance Health
+
+**Do not trust the container healthcheck or `/api/healthz`.** On 2026-08-11 this
+instance reported `(healthy)`, passed `/api/healthz` (both DB and cache pings), and had
+three weeks of uptime — while **100% of HTTP git clones had been failing for 30 hours**.
+A poisoned global `uploadpack.packObjectsHook` broke every `git upload-pack`; nothing in
+the liveness surface reflected it. Renovate kept authenticating and failing, unnoticed.
+
+Liveness probes test whether the process is running. They do not test whether it can do
+its job. `gitea_health` performs a **real clone** — the only check that catches this class
+of failure — plus verifies the private API is not exposed:
+
+```bash
+gitea_health                 # auto-picks a repo
+gitea_health Bill/AI-Trader  # test a specific one
+```
+
+Returns non-zero if any check fails. When investigating a failure, get the server-side
+error *rate* (an absolute count of zero proves health; a green healthcheck does not):
+
+```bash
+ssh <docker-host> "docker logs gitea --since 1h 2>&1 | grep -ciE '\[E\]|fatal'"
+```
+
+## Auditing Repository Visibility
+
+```bash
+gitea_audit_visibility
+```
+
+Catches two distinct problems: **visibility drift** (a repo you believe is private but
+isn't — this found `Bill/phone-setup` public while it was documented as private) and
+**secret-shaped files reachable without authentication**.
+
+Filename matches are candidates, not confirmed leaks — inspect them. Two known-benign
+examples on this instance: `Bill/actual/.env` (a comment saying no vars are needed) and
+`Bill/obsidian-mcp-server/.npmrc` (`tag-version-prefix=""`).
+
+It scans the **default branch only**. A secret committed and later deleted still lives in
+history; check a clone with
+`git log --all --diff-filter=A --name-only --pretty=format: | sort -u`.
 
 **Pull Request Management:**
 - `gitea_list_prs [OWNER] REPO [STATE]` - List pull requests (state: open/closed/all)
@@ -236,11 +284,67 @@ Existing values are shown as defaults - press Enter to keep them.
 
 ## Security Best Practices
 
+### Client-side (your tokens)
+
 1. **Token file permissions** - Setup script sets chmod 600 automatically
 2. **Use minimal token scopes** - Only request permissions you need
 3. **Rotate tokens periodically** - Regenerate API tokens every 90 days
 4. **Separate concerns** - API token for management, git credentials for push/pull
 5. **Never commit tokens** - Token files are in ~/.config, not in repos
+
+### Server-side (the instance's own secrets)
+
+The items above protect *your user account*. They are not the secrets that get an
+instance compromised. On 2026-08-11 an attacker used a valid **`INTERNAL_TOKEN`** to
+reach `POST /api/internal/manager/add-logger`, turning Gitea's file-mode logger into an
+arbitrary file write, poisoning `uploadpack.packObjectsHook`, and attempting RCE on the
+next clone. That token was the install-time original — **never rotated in 3.4 years**.
+
+1. **Never expose `/api/internal` through the reverse proxy.** Gitea calls these routes
+   on itself via `LOCAL_ROOT_URL` (`localhost:3000`) and over the container network; they
+   never legitimately traverse a public proxy. Deny the whole prefix at the edge. In
+   nginx the deny must use `^~` so it outranks any `~ /api...` regex location:
+   ```nginx
+   location ^~ /api/internal { return 403; }
+   ```
+   `gitea_health` asserts this — it fails if `/api/internal/dummy` returns 200.
+
+2. **Rotate `INTERNAL_TOKEN` on any suspicion, and on a schedule.** It is a bearer
+   credential compared verbatim, sent in the **`X-Gitea-Internal-Auth`** header (not
+   `Authorization`). Rotation is cheap and lossless — no data is encrypted with it:
+   ```bash
+   docker exec gitea gitea generate secret INTERNAL_TOKEN   # then write to app.ini
+   ```
+   Restart afterward, then verify push hooks still work (they call `/api/internal/hook/*`)
+   by pushing a throwaway branch.
+
+3. **Check whether `SECRET_KEY` is actually set.** If it is empty in `app.ini`, Gitea
+   silently falls back to the hardcoded default `!#@FDEWREWR&*(` — upstream keeps that
+   fallback deliberately because it cannot rotate an existing key. Everything encrypted
+   at rest (**Actions secrets**, mirror credentials, 2FA seeds) is then protected by a
+   constant published in the source, readable by anyone holding a copy of the database
+   **or a database backup**.
+   ```bash
+   docker exec gitea grep '^SECRET_KEY' /data/gitea/conf/app.ini
+   ```
+   Setting a real key **invalidates existing encrypted values** — inventory them first
+   (`select count(*) from two_factor;`, `from secret;`, `from mirror;`) and be ready to
+   re-enter them. Rotate the underlying credentials too; assume they were exposed.
+
+4. **Pin `REVERSE_PROXY_TRUSTED_PROXIES`.** A value of `*` trusts `X-Forwarded-For` from
+   any source. Set it to the proxy's network (e.g. `172.19.0.0/16`).
+
+5. **Treat plaintext secrets in "private" config repos as replicated secrets.** The
+   convention of committing `app.ini` unencrypted to a private repo means *every clone,
+   backup, and replicated dataset is a copy of every secret in it*. That is the most
+   likely explanation for a leaked `INTERNAL_TOKEN` when no server-side exposure exists.
+
+6. **The Actions runner mounts `/var/run/docker.sock`.** Anything that can run a workflow
+   gets root on the Docker host. Keep registration disabled so outsiders cannot
+   fork-and-PR into a workflow run, and prune stale runner registrations.
+
+7. **Stay current.** 1.27.0 shipped breaking security fixes (hardened access checks,
+   LFS proof-of-possession, path-traversal prevention in repo restore).
 
 ## Troubleshooting
 
