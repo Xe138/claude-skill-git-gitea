@@ -271,6 +271,48 @@ the base. This is **not** a real conflict. Re-verify the target image line on th
 branch (`raw/docker-compose.yml`); if the line still matches the PR's "from" value, wait
 a few seconds and retry the merge. Only treat it as a real conflict if the line diverged.
 
+## Secrets in a repo (SOPS/age)
+
+Standard way to keep credentials in any git repo without committing plaintext — and
+the simplest way to hand an **AI agent a credential inside a git-controlled workspace**
+(Cloudflare token, API key, DB password). Secrets are encrypted with SOPS + age; the
+encrypted file is committed; any agent on a host whose age key is a recipient decrypts
+it transparently.
+
+Use the helper (operates on the current repo):
+```bash
+S=~/.claude/skills/claude-skill-git-gitea/scripts/sops-secrets.sh
+"$S" init                              # once per repo: writes .sops.yaml + secrets/
+"$S" add cloudflare CLOUDFLARE_API_TOKEN   # prompts for value; -> secrets/cloudflare.sops.yaml
+"$S" view cloudflare                   # print decrypted
+"$S" edit cloudflare                   # $EDITOR round-trip
+"$S" rekey                             # re-encrypt all after editing .sops.yaml
+git add .sops.yaml secrets/ && git commit -m "Add cloudflare credentials (encrypted)"
+```
+
+**Recipients — the multi-recipient standard, NEVER a single key:**
+- **`bill`** — Bill's user key, recovery from his desktop; always a decryption path.
+- **the host(s) where agents run** — for a workspace on soos, `wsl` (soos's user key,
+  so an agent's plain `sops -d` just works) + the `soos` host key.
+- **one recovery host** (`inkling`) so no single host loss orphans the secret.
+
+`init` defaults to `bill wsl soos inkling`; pass aliases to change the set, e.g.
+`sops-secrets.sh init bill inkling shellington` for a repo whose agents run on inkling.
+Canonical pubkeys live in the script's `AGE_RECIPIENTS` table.
+
+**How an agent reads a secret:** on any recipient host the private key is at
+`~/.config/sops/age/keys.txt` (or the host SSH key), so
+`sops -d secrets/foo.sops.yaml` — or `sops -d --extract '["KEY"]' secrets/foo.sops.yaml`
+for one field — returns plaintext with no extra setup. Reference it from scripts;
+never copy plaintext into the repo.
+
+**Rules:**
+- A secrets file MUST list ≥2 independent keys (`bill` + ≥1 host). A single-recipient
+  file is one lost key away from being permanently undecryptable.
+- SOPS-encrypted files are safe to commit, but keep repos holding secrets **private**;
+  `gitea_audit_visibility` flags secret-shaped files exposed in public repos.
+- To change the fleet recipient set, edit `AGE_RECIPIENTS` / `.sops.yaml`, then `rekey`.
+
 ## Reconfiguring
 
 To change any settings, re-run the setup script (or source the helper and run `gitea_help` to see the path):
