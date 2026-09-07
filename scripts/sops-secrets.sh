@@ -21,14 +21,13 @@ set -euo pipefail
 # `bill` (recovery, from his desktop) + the host(s) where its agents run + one
 # recovery host. Defaults suit a workspace whose agents run on soos.
 declare -A AGE_RECIPIENTS=(
-  [bill]=age1usp4weqdyygssa9l9d063wv8gahy6t8zctr9gpzxdunfav57h3cqcaewj4    # user, recovery
-  [wsl]=age1ethpglzfashs0824tcg3cvuzcrucg66xgx25f9amlqdm6wh5qemq3ws8ac     # soos user key (agents on soos)
+  [bill]=age1ethpglzfashs0824tcg3cvuzcrucg66xgx25f9amlqdm6wh5qemq3ws8ac  # Bill's user key: soos keys.txt + password manager
   [soos]=age1g3vhtpfptz3klwvvw3qwyejg50neeqf0ac8lndvu0pdfv7wfqv8s3njelv    # soos host key
   [inkling]=age19hy45afa73e6m8ltjz36qd0hpp2ekmd0kg72etr5deaydp845azqr92pem # recovery host
   [shellington]=age1fcmjersjwuqecz9n58qf8n3pk46r7439fgzhdtjw5z9zq40sjygqfc5cz8
   [tweak]=age1l4qj6cf2cn469hr3fa743glnlzr9gk53j3l3az5muchsaepmnqhspuhe7m
 )
-DEFAULT_ALIASES=(bill wsl soos inkling)
+DEFAULT_ALIASES=(bill soos inkling)
 
 REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || { echo "not inside a git repo" >&2; exit 1; }
 

@@ -291,12 +291,14 @@ git add .sops.yaml secrets/ && git commit -m "Add cloudflare credentials (encryp
 ```
 
 **Recipients — the multi-recipient standard, NEVER a single key:**
-- **`bill`** — Bill's user key, recovery from his desktop; always a decryption path.
-- **the host(s) where agents run** — for a workspace on soos, `wsl` (soos's user key,
-  so an agent's plain `sops -d` just works) + the `soos` host key.
+- **`bill`** (`age1ethpg…`) — Bill's user key: in his password manager and in soos's
+  `keys.txt`, so an agent's plain `sops -d` on soos works with no setup. Always a
+  recovery path.
+- **the host(s) where agents run** — the `soos` host key, plus any other host the repo
+  deploys to, so each self-decrypts with its own key.
 - **one recovery host** (`inkling`) so no single host loss orphans the secret.
 
-`init` defaults to `bill wsl soos inkling`; pass aliases to change the set, e.g.
+`init` defaults to `bill soos inkling`; pass aliases to change the set, e.g.
 `sops-secrets.sh init bill inkling shellington` for a repo whose agents run on inkling.
 Canonical pubkeys live in the script's `AGE_RECIPIENTS` table.
 
