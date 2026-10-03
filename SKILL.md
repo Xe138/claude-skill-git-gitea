@@ -265,11 +265,14 @@ When reviewing a repo's Renovate PRs, sequence merges as follows:
 Renovate reconciles or closes them on its next run. (Auto-mode blocks closing PRs the
 agent didn't create, so closing is the wrong tool anyway.)
 
-**Stale-`mergeable` quirk:** after merging a PR, Gitea may briefly report the next PR as
-`mergeable:false` or return `{"message":"Please try again later"}` while it recomputes
-the base. This is **not** a real conflict. Re-verify the target image line on the default
-branch (`raw/docker-compose.yml`); if the line still matches the PR's "from" value, wait
-a few seconds and retry the merge. Only treat it as a real conflict if the line diverged.
+**Stale-`mergeable` quirk:** after any push to the base branch (including a merge),
+Gitea 1.27 marks every other open PR as *checking*. It reports `mergeable:false`, and the
+merge API returns `405 {"message":"Please try again later"}`. This is **not** a real
+conflict. It re-checks a PR **only when someone opens it**. Waiting alone does nothing:
+on 2026-10-03, PRs sat in *checking* for over an hour. Call `gitea_get_pr OWNER REPO INDEX`.
+That opens the PR, and it usually becomes mergeable within seconds; then retry the merge.
+Re-verify the target image line on the default branch (`raw/docker-compose.yml`) first.
+Only treat it as a real conflict if that line no longer matches the PR's "from" value.
 
 ## Secrets in a repo (SOPS/age)
 
